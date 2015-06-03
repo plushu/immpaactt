@@ -1,0 +1,76 @@
+#! /usr/bin/env bash
+
+servname="plushu"
+
+plushu_root=/home/plushu
+apps_dir=$plushu_root/apps
+
+# Set the "REMOTE" variable according to any "remote" command-line arg.
+case "$1" in
+  --remote)
+    shift
+    REMOTE=$1
+    shift
+    ;;
+  --remote=*)
+    REMOTE=${1#--remote=}
+    shift
+esac
+
+# TODO: Better/more named/positional options/parameters.
+# (specifically addon and port)
+
+# The name of the Git remote to read the server URL from.
+# By default, the remote name is $servname ("plushu"):
+# you can change that here.
+REMOTE=${REMOTE:-$servname}
+
+# User to override on the remote. Unset to use the same user as the remote.
+# (Assuming remote is a Plushu user, you probably don't want to do that.)
+REMOTE_USER=${REMOTE_USER-root}
+
+if [[ -z "$HOST" || -z "$APP" ]]; then
+  remote_url=$(git config --get remote.$REMOTE.url)
+
+  if [[ "$?" -ne 0 ]]; then
+    echo "Remote \"$REMOTE\" not found"
+    exit 1
+  fi
+
+  # Safety check that the remote user name is the same as the expected service
+  if [[ "${remote_url%%@*}" != "$servname" ]]; then
+    echo "Remote \"$REMOTE\" does not appear to be a $servname server"
+    exit 1
+  fi
+
+  if [[ -z "$HOST" ]]; then
+    # The hostname to connect to.
+    HOST=${remote_url%:*}
+    if [[ -n "$REMOTE_USER" ]]; then
+      HOST=$REMOTE_USER@${HOST#*@}
+    fi
+  fi
+
+  if [[ -z "$APP" ]]; then
+    # The name of the repo on the remote.
+    remote_repo=${remote_url##*:}
+    APP=${remote_repo%.git}
+  fi
+fi
+
+# If HOST doesn't specify a user, add REMOTE_USER
+if [[ "${HOST#*@}" == "$HOST" && -n "$REMOTE_USER" ]]; then
+  HOST=$REMOTE_USER@$HOST
+fi
+
+LOCAL_IP=${LOCAL_IP:-${IP:-0.0.0.0}}
+PORT=${PORT:-8080}
+ADDON_PORT=${ADDON_PORT:-$PORT}
+LOCAL_PORT=${LOCAL_PORT:-$PORT}
+
+cidfile=$(printf '%q' "$apps_dir/$APP/addons/$ADDON/docker/run.cid")
+
+addon_ip=$(ssh $HOST "docker inspect --format \
+  '{{ .NetworkSettings.IPAddress }}' \$(<$cidfile)")
+
+exec ssh -NTL "$LOCAL_IP:$LOCAL_PORT:$addon_ip:$ADDON_PORT" $HOST
